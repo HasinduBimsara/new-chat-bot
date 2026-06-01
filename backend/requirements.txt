@@ -1,0 +1,9 @@
+flask
+flask-cors
+numpy
+scikit-learn
+sentence-transformers
+google-generativeai
+python-dotenv
+torch
+tiktoken
