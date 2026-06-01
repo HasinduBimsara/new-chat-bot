@@ -1,0 +1,11 @@
+.venv_gpu/
+node_modules/
+dist/
+*.bin
+*.pt
+*.log
+*.txt
+!global_suggestions_dataset.txt
+!requirements.txt
+__pycache__/
+.env
