@@ -25,8 +25,10 @@ export default function QuestionnaireScreen({ navigation }) {
         ...answersContext, 
         { 
           questionId: question.id, 
-          questionText: question.text, 
+          question: question.text, 
           answer: option.text,
+          score: option.id,
+          suggestions: [suggestion],
           suggestion: suggestion
         }
       ];

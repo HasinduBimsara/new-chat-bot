@@ -50,11 +50,29 @@ def recommend_suggestions():
     # 1. Collect all raw suggestions from user's answers and their associated scores
     raw_suggestions = []
     has_severe = False
+    dataset_dict = None
     for ans in user_answers:
         score = ans.get('score', 1)
         if score >= 4:
             has_severe = True
         suggestions = ans.get('suggestions', [])
+        
+        # If suggestions list is empty, look it up in dataset.json
+        if not suggestions:
+            if dataset_dict is None:
+                try:
+                    dataset_dict = load_dataset()
+                except Exception as e:
+                    print("Error loading dataset in recommendation lookup:", e)
+            if dataset_dict:
+                q_id = ans.get('questionId')
+                # Find matching question in dataset questionnaire
+                q_match = next((q for q in dataset_dict['questionnaire'] if q['id'] == q_id), None)
+                if q_match:
+                    opt_match = next((opt for opt in q_match['options'] if opt['score'] == score), None)
+                    if opt_match:
+                        suggestions = opt_match.get('suggestions', [])
+                        
         for sug in suggestions:
             raw_suggestions.append(sug)
             
@@ -133,8 +151,10 @@ Local SLM හි මූලික නිගමනය (Questionnaire Analysis):
 
 විශේෂ උපදෙස්:
 1. රෝගියා කතාබහේදී (Chat Transcript) ඉදිරිපත් කළ නව ගැටලු, හැඟීම්, සිතුවිලි සහ තොරතුරු කෙරෙහි විශේෂ අවධානයක් යොමු කරන්න.
-2. ප්‍රශ්නාවලියේ මූලික යෝජනා වලට පමණක් සීමා නොවී, රෝගියා කතාබහේදී සඳහන් කළ අලුත්ම කරුණු (උදාහරණ: රැකියා/විභාග පීඩනය, නින්ද නොයාම, පවුලේ හෝ මිතුරන්ගේ ප්‍රශ්න ආදී ඕනෑම දෙයක්) වෙනුවෙන් සෘජුවම ගැලපෙන නවතම ප්‍රායෝගික සහ සායනික යෝජනා (CBT තාක්ෂණයන් ඇතුළත්ව) අලුතින්ම නිර්මාණය කර ඇතුළත් කරන්න.
-3. අවසාන ලැයිස්තුව වඩාත් පුද්ගලීකරණය කළ (Personalized) එකක් විය යුතුය. එය රෝගියාගේ සැබෑ තත්ත්වයට සහ කතාබහට උපරිමයෙන් ගැලපෙන යෝජනා 10 ක් (හෝ ඊට වැඩි ගණනක්) විය යුතුය.
+2. අවසාන ලැයිස්තුවෙහි ඇති යෝජනා (Suggestions) ප්‍රශ්නාවලියේ මූලික යෝජනා (Clinical Database) වල ශෛලියට සහ ආකෘතියට (Short, direct, practical, single-sentence plain-text Sinhala advice) උපරිමයෙන් සමාන විය යුතුය.
+3. කිසිම හේතුවක් මත markdown formatting, තරු ලකුණු (* හෝ **), bold text හෝ මාතෘකා (headers) භාවිත නොකරන්න. එක් එක් යෝජනාව තනි සරල වාක්‍යයකින් (Plain-text) පමණක් සකස් කරන්න. උදාහරණයක් ලෙස: 'නින්දට යාමට පෙර තිර (Screens) භාවිතය අඩු කරන්න.' වැනි කෙටි සෘජු වාක්‍ය පමණක් ලියන්න.
+4. හැකිතාක් දුරට ලබා දී ඇති Clinical Database ලැයිස්තුවේ ඇති යෝජනා සෘජුවම තෝරාගෙන භාවිත කරන්න. රෝගියා කතාබහේදී සඳහන් කළ අලුත්ම කරුණු වෙනුවෙන් අලුතින්ම යෝජනා සාදන්නේ නම්, ඒවාද Clinical Database එකෙහි ඇති යෝජනා වල ශෛලියටම (Short, direct action items) ගැලපෙන සේ සකස් කරන්න.
+5. අවසාන ලැයිස්තුව රෝගියාගේ සැබෑ තත්ත්වයට සහ කතාබහට උපරිමයෙන් ගැලපෙන යෝජනා 10 ක් (හෝ ඊට වැඩි ගණනක්) විය යුතුය.
 
 පිළිතුරේ යෝජනා පමණක් ලැයිස්තුගත කරන්න (අංක යොදා). වෙනත් හැඳින්වීම් හෝ අනවශ්‍ය කතා කිසිවක් ඇතුළත් නොකරන්න."""
             
@@ -142,12 +162,14 @@ Local SLM හි මූලික නිගමනය (Questionnaire Analysis):
             # Parse the response text into a list
             suggestions = [line.strip() for line in response.text.split('\n') if line.strip()]
             
-            # Clean up numbering (e.g. "1. යෝජනාව" -> "යෝජනාව")
+            # Clean up numbering (e.g. "1. යෝජනාව" -> "යෝජනාව") and asterisks
             cleaned_suggestions = []
             for s in suggestions:
                 import re
                 cleaned = re.sub(r'^\d+[\.\)]\s*', '', s).strip()
-                if cleaned.startswith('*') or cleaned.startswith('-'):
+                # Remove any single or double asterisks from start/end or anywhere in the sentence
+                cleaned = cleaned.replace('**', '').replace('*', '')
+                if cleaned.startswith('-'):
                     cleaned = cleaned[1:].strip()
                 if cleaned:
                     cleaned_suggestions.append(cleaned)

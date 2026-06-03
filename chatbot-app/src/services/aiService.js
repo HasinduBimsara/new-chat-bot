@@ -1,45 +1,114 @@
 // src/services/aiService.js
+import { Platform } from 'react-native';
+import dataset from '../data/dataset.json';
 
-/**
- * Mock AI Service for the Sinhala Mental Health Chatbot.
- * In production, this will connect to the custom SLM via API.
- */
+const BASE_URL = Platform.OS === 'android' ? 'http://10.0.2.2:5000' : 'http://localhost:5000';
 
-const delay = (ms) => new Promise(res => setTimeout(res, ms));
+export const getSuggestion = async (questionText, answerText, context) => {
+  try {
+    const qMatch = dataset.questionnaire.find(q => q.question === questionText);
+    if (qMatch) {
+      const answerClean = answerText.split('(')[0].trim();
+      const optMatch = qMatch.options.find(
+        opt => opt.text.startsWith(answerClean) || answerClean.startsWith(opt.text)
+      );
+      if (optMatch && optMatch.suggestions && optMatch.suggestions.length > 0) {
+        // Return a random suggestion from the clinical suggestions list
+        const randomIndex = Math.floor(Math.random() * optMatch.suggestions.length);
+        return optMatch.suggestions[randomIndex];
+      }
+    }
+  } catch (error) {
+    console.error("Error looking up suggestion locally:", error);
+  }
 
-export const getSuggestion = async (question, answer, context) => {
-    await delay(1000); // Simulate network latency
-
-    const suggestions = [
-        "ඔබගේ පිළිතුරට අනුව, ඔබ හොඳින් විවේක ගැනීම වැදගත් බව පෙනේ.",
-        "මෙය සාමාන්‍ය තත්වයකි. දිනපතා භාවනා කිරීමෙන් මනස සන්සුන් කරගත හැක.",
-        "ඔබගේ කලබලකාරී බව අඩු කර ගැනීමට ගැඹුරු හුස්ම ගැනීමේ ව්‍යායාම (Deep Breathing) කරන්න.",
-        "වඩාත් යහපත් මානසික සෞඛ්‍යයක් සඳහා පවුලේ අය හෝ මිතුරන් සමඟ කතාබහ කිරීම සුදුසුය.",
-        "ඔබගේ සිතුවිලි ලිහිල් කිරීම සඳහා ඔබේ ප්‍රියතම විනෝදාංශයක නිරත වීම වඩාත් යහපත් වේ.",
-        "කෙටි ඇවිදීමක් හෝ ව්‍යායාම කිරීම මඟින් ඔබේ මනස සැහැල්ලු කරගත හැක.",
-        "නින්දට පෙර තිර (Screens) භාවිතය අඩු කිරීමෙන් යහපත් නින්දක් ලබා ගත හැක."
-    ];
-    
-    const randomIndex = Math.floor(Math.random() * suggestions.length);
-    return suggestions[randomIndex];
+  // Fallback suggestion
+  return "ඔබගේ පිළිතුරට අනුව, ඔබ හොඳින් විවේක ගැනීම වැදගත් බව පෙනේ.";
 };
 
 export const getChatResponse = async (chatMessage, questionnaireContext, chatHistory) => {
-    await delay(1500);
+  try {
+    const formattedHistory = chatHistory.map(m => ({
+      sender: m.sender,
+      text: m.text
+    }));
     
-    // Check for some keywords
-    if (chatMessage.includes("බය") || chatMessage.includes("භය")) {
-        return "ඔබ තුළ යම් බියක් ඇති බව මට තේරෙනවා. ප්‍රශ්නාවලියේදී ඔබ කලබලකාරී බවක් පෙන්නුම් කළා. ගැඹුරු හුස්ම ගැනීමෙන් මෙය පාලනය කළ හැක. මේ බිය ඇතිවීමට විශේෂ හේතුවක් තිබේද?";
-    }
+    // Add the current user message to history snapshot if it's not already in there
+    const historySnapshot = [...formattedHistory, { sender: 'user', text: chatMessage }];
 
-    if (chatMessage.includes("නින්ද")) {
-        return "නින්ද නොයාම මානසික පීඩනයේ ලක්ෂණයක් විය හැක. පෙර යෝජනා කළ පරිදි නින්දට පෙර කෝපි බීමෙන් වැළකී සිටීම උත්සාහ කරන්න.";
-    }
+    // Format questionnaireContext to match backend's expected structure
+    const formattedContext = questionnaireContext.map(q => ({
+      questionId: q.questionId,
+      question: q.questionText || q.question,
+      answer: q.answer,
+      score: q.score || 1,
+      suggestions: q.suggestions || [q.suggestion]
+    }));
 
-    return "ඔබ පැවසූ කරුණ මට වැටහෙනවා. ඔබගේ පෙර පිළිතුරු වලට අනුව ඔබ යම් පීඩනයකින් සිටින බව පෙනෙන බැවින්, සන්සුන්ව සිටීමට උත්සාහ කරන්න. ඔබට වෙනත් ගැටළු ඇත්ද?";
+    const response = await fetch(`${BASE_URL}/api/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        message: chatMessage,
+        contextHistory: formattedContext,
+        chatHistory: historySnapshot,
+        use_local_model: false // Default to Gemini on backend
+      })
+    });
+    
+    const data = await response.json();
+    return data.reply || "දෝෂයකි.";
+  } catch (error) {
+    console.error("Chat response API error:", error);
+    return "ජාල දෝෂයකි. කරුණාකර නැවත උත්සාහ කරන්න.";
+  }
 };
 
 export const getFinalSummary = async (questionnaireContext, chatHistory) => {
-    await delay(1500);
+  try {
+    const formattedContext = questionnaireContext.map(q => ({
+      questionId: q.questionId,
+      question: q.questionText || q.question,
+      answer: q.answer,
+      score: q.score || 1,
+      suggestions: q.suggestions || [q.suggestion]
+    }));
+
+    const formattedHistory = chatHistory.map(m => ({
+      sender: m.sender,
+      text: m.text
+    }));
+
+    const response = await fetch(`${BASE_URL}/api/recommend`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        answers: formattedContext,
+        chatHistory: formattedHistory
+      })
+    });
+    
+    const data = await response.json();
+    let filtered = data.suggestions || [];
+    
+    // Add urgent hotline if score was 5 anywhere
+    const maxScore = Math.max(...formattedContext.map(c => c.score), 0);
+    if (maxScore === 5 && !filtered.some(s => s.includes("1926"))) {
+      filtered.unshift("🚨 කරුණාකර හැකි ඉක්මනින් මනෝවිද්‍යා උපදේශකයෙකුගේ සහාය ලබා ගන්න හෝ 1926 (ජාතික මානසික සෞඛ්‍ය උපකාරක සේවය) වෙත අමතන්න.");
+    }
+
+    // Format the suggestions as a numbered string list for displaying in standard Text component
+    if (filtered.length > 0) {
+      return filtered.map((s, idx) => `${idx + 1}. ${s}`).join('\n\n');
+    }
+    
+    return "යෝජනා කිසිවක් හමු නොවීය.";
+  } catch (error) {
+    console.error("Final summary API error:", error);
     return "සම්පූර්ණ සංවාදයට අනුව මාගේ ප්‍රධාන යෝජනා:\n\n1. දිනපතා පැය 7-8 ක නින්දක් ලබා ගැනීමට උත්සාහ කරන්න.\n2. අධික පීඩනය හෝ කලබලකාරී බවක් දැනෙන සෑම අවස්ථාවකදීම ගැඹුරු හුස්ම ගැනීමේ ව්‍යායාම කරන්න.\n3. සිතට වද දෙන සිතුවිලි ඇත්නම් එය විශ්වාසවන්ත අයෙකු සමග බෙදා ගන්න.\n4. ඔබට තවදුරටත් මෙම අපහසුතා පවතී නම් වෘත්තීය මනෝවිද්‍යා උපදේශනයක් (Counseling) ලබා ගැනීමට පසුබට නොවන්න.";
+  }
 };
