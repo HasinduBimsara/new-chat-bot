@@ -62,9 +62,43 @@ def recommend_suggestions():
     
     # 2. Extract key points from chat history
     chat_transcript = ""
+    user_chat_messages = []
     for msg in chat_history:
         sender_name = "රෝගියා" if msg['sender'] == 'user' else "උපදේශක"
         chat_transcript += f"{sender_name}: {msg['text']}\n"
+        if msg['sender'] == 'user':
+            user_chat_messages.append(msg['text'])
+            
+    # 2b. Retrieve suggestions related to user's chat messages using RAG
+    chat_suggestions = []
+    if user_chat_messages:
+        try:
+            dataset_dict = load_dataset()
+            all_db_suggestions = []
+            for q in dataset_dict['questionnaire']:
+                for opt in q['options']:
+                    all_db_suggestions.extend(opt['suggestions'])
+            all_db_suggestions = list(set(all_db_suggestions))
+            
+            # Encode database suggestions
+            doc_embeddings = model.encode(all_db_suggestions)
+            
+            for user_msg in user_chat_messages:
+                # Skip short generic greetings
+                if len(user_msg.strip()) < 5:
+                    continue
+                query_embedding = model.encode([user_msg])
+                similarities = cosine_similarity(query_embedding, doc_embeddings)[0]
+                top_indices = np.argsort(similarities)[-3:][::-1]
+                for idx in top_indices:
+                    if similarities[idx] > 0.32:
+                        chat_suggestions.append(all_db_suggestions[idx])
+        except Exception as e:
+            print("Error retrieving fallback chat suggestions:", e)
+            
+    # Combine questionnaire suggestions and chat RAG suggestions
+    combined_raw_suggestions = raw_suggestions + chat_suggestions
+    unique_texts = list(set(combined_raw_suggestions))
         
     # 3. Use Local SLM to generate an initial summary of the questionnaire
     slm_questionnaire_summary = ""
@@ -84,7 +118,7 @@ def recommend_suggestions():
         try:
             gen_model = genai.GenerativeModel('gemini-2.5-flash')
             prompt = f"""ඔබ දක්ෂ සිංහල මනෝවිද්‍යා උපදේශකයෙකි. 
-පහත දැක්වෙන්නේ අපගේ Local AI Model (SLM) එක මගින් ප්‍රශ්නාවලියක් මත පදනම්ව ලබා දුන් මූලික නිගමනය, අදාළ සායනික යෝජනා (Clinical Suggestions) සහ රෝගියා සමග පැවැත්වූ කතාබහකි (Chat Transcript).
+පහත දැක්වෙන්නේ අපගේ Local AI Model (SLM) එක මගින් ප්‍රශ්නාවලියක් මත පදනම්ව ලබා දුන් මූලික නිගමනය, ප්‍රශ්නාවලියෙන් ලැබුණු මූලික යෝජනා (Clinical Database) සහ රෝගියා සමග පැවැත්වූ අවසාන කතාබහකි (Chat Transcript).
 
 Local SLM හි මූලික නිගමනය (Questionnaire Analysis):
 {slm_questionnaire_summary}
@@ -92,11 +126,17 @@ Local SLM හි මූලික නිගමනය (Questionnaire Analysis):
 ප්‍රශ්නාවලියේ මූලික යෝජනා (Clinical Database):
 {chr(10).join(unique_texts[:15])}
 
-රෝගියා සමග කතාබහ:
+රෝගියා සමග කතාබහ (Chat Transcript):
 {chat_transcript}
 
-කරුණාකර මෙම දත්ත සියල්ල (SLM නිගමනය, මූලික යෝජනා සහ Chat එක) විශ්ලේෂණය කර, රෝගියාට වඩාත්ම ගැලපෙන, ප්‍රායෝගික මානසික සෞඛ්‍ය යෝජනා 10 ක් (හෝ ඊට වැඩි ගණනක්) සිංහලෙන් ලැයිස්තුගත කරන්න.
-යෝජනා පමණක් ලබා දෙන්න (අංක යොදා). වෙනත් කතා අවශ්‍ය නැත."""
+කරුණාකර මෙම දත්ත සියල්ල (SLM නිගමනය, මූලික යෝජනා සහ Chat Transcript එක) ඉතා හොඳින් විශ්ලේෂණය කරන්න.
+
+විශේෂ උපදෙස්:
+1. රෝගියා කතාබහේදී (Chat Transcript) ඉදිරිපත් කළ නව ගැටලු, හැඟීම්, සිතුවිලි සහ තොරතුරු කෙරෙහි විශේෂ අවධානයක් යොමු කරන්න.
+2. ප්‍රශ්නාවලියේ මූලික යෝජනා වලට පමණක් සීමා නොවී, රෝගියා කතාබහේදී සඳහන් කළ අලුත්ම කරුණු (උදාහරණ: රැකියා/විභාග පීඩනය, නින්ද නොයාම, පවුලේ හෝ මිතුරන්ගේ ප්‍රශ්න ආදී ඕනෑම දෙයක්) වෙනුවෙන් සෘජුවම ගැලපෙන නවතම ප්‍රායෝගික සහ සායනික යෝජනා (CBT තාක්ෂණයන් ඇතුළත්ව) අලුතින්ම නිර්මාණය කර ඇතුළත් කරන්න.
+3. අවසාන ලැයිස්තුව වඩාත් පුද්ගලීකරණය කළ (Personalized) එකක් විය යුතුය. එය රෝගියාගේ සැබෑ තත්ත්වයට සහ කතාබහට උපරිමයෙන් ගැලපෙන යෝජනා 10 ක් (හෝ ඊට වැඩි ගණනක්) විය යුතුය.
+
+පිළිතුරේ යෝජනා පමණක් ලැයිස්තුගත කරන්න (අංක යොදා). වෙනත් හැඳින්වීම් හෝ අනවශ්‍ය කතා කිසිවක් ඇතුළත් නොකරන්න."""
             
             response = gen_model.generate_content(prompt)
             # Parse the response text into a list
