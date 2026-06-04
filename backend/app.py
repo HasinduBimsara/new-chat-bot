@@ -50,11 +50,29 @@ def recommend_suggestions():
     # 1. Collect all raw suggestions from user's answers and their associated scores
     raw_suggestions = []
     has_severe = False
+    dataset_dict = None
     for ans in user_answers:
         score = ans.get('score', 1)
         if score >= 4:
             has_severe = True
         suggestions = ans.get('suggestions', [])
+        
+        # If suggestions list is empty, look it up in dataset.json
+        if not suggestions:
+            if dataset_dict is None:
+                try:
+                    dataset_dict = load_dataset()
+                except Exception as e:
+                    print("Error loading dataset in recommendation lookup:", e)
+            if dataset_dict:
+                q_id = ans.get('questionId')
+                # Find matching question in dataset questionnaire
+                q_match = next((q for q in dataset_dict['questionnaire'] if q['id'] == q_id), None)
+                if q_match:
+                    opt_match = next((opt for opt in q_match['options'] if opt['score'] == score), None)
+                    if opt_match:
+                        suggestions = opt_match.get('suggestions', [])
+                        
         for sug in suggestions:
             raw_suggestions.append(sug)
             
@@ -133,8 +151,10 @@ Local SLM හි මූලික නිගමනය (Questionnaire Analysis):
 
 විශේෂ උපදෙස්:
 1. රෝගියා කතාබහේදී (Chat Transcript) ඉදිරිපත් කළ නව ගැටලු, හැඟීම්, සිතුවිලි සහ තොරතුරු කෙරෙහි විශේෂ අවධානයක් යොමු කරන්න.
-2. ප්‍රශ්නාවලියේ මූලික යෝජනා වලට පමණක් සීමා නොවී, රෝගියා කතාබහේදී සඳහන් කළ අලුත්ම කරුණු (උදාහරණ: රැකියා/විභාග පීඩනය, නින්ද නොයාම, පවුලේ හෝ මිතුරන්ගේ ප්‍රශ්න ආදී ඕනෑම දෙයක්) වෙනුවෙන් සෘජුවම ගැලපෙන නවතම ප්‍රායෝගික සහ සායනික යෝජනා (CBT තාක්ෂණයන් ඇතුළත්ව) අලුතින්ම නිර්මාණය කර ඇතුළත් කරන්න.
-3. අවසාන ලැයිස්තුව වඩාත් පුද්ගලීකරණය කළ (Personalized) එකක් විය යුතුය. එය රෝගියාගේ සැබෑ තත්ත්වයට සහ කතාබහට උපරිමයෙන් ගැලපෙන යෝජනා 10 ක් (හෝ ඊට වැඩි ගණනක්) විය යුතුය.
+2. අවසාන ලැයිස්තුවෙහි ඇති යෝජනා (Suggestions) ප්‍රශ්නාවලියේ මූලික යෝජනා (Clinical Database) වල ශෛලියට සහ ආකෘතියට (Short, direct, practical, single-sentence plain-text Sinhala advice) උපරිමයෙන් සමාන විය යුතුය.
+3. කිසිම හේතුවක් මත markdown formatting, තරු ලකුණු (* හෝ **), bold text හෝ මාතෘකා (headers) භාවිත නොකරන්න. එක් එක් යෝජනාව තනි සරල වාක්‍යයකින් (Plain-text) පමණක් සකස් කරන්න. උදාහරණයක් ලෙස: 'නින්දට යාමට පෙර තිර (Screens) භාවිතය අඩු කරන්න.' වැනි කෙටි සෘජු වාක්‍ය පමණක් ලියන්න.
+4. හැකිතාක් දුරට ලබා දී ඇති Clinical Database ලැයිස්තුවේ ඇති යෝජනා සෘජුවම තෝරාගෙන භාවිත කරන්න. රෝගියා කතාබහේදී සඳහන් කළ අලුත්ම කරුණු වෙනුවෙන් අලුතින්ම යෝජනා සාදන්නේ නම්, ඒවාද Clinical Database එකෙහි ඇති යෝජනා වල ශෛලියටම (Short, direct action items) ගැලපෙන සේ සකස් කරන්න.
+5. අවසාන ලැයිස්තුව රෝගියාගේ සැබෑ තත්ත්වයට සහ කතාබහට උපරිමයෙන් ගැලපෙන යෝජනා 10 ක් (හෝ ඊට වැඩි ගණනක්) විය යුතුය.
 
 පිළිතුරේ යෝජනා පමණක් ලැයිස්තුගත කරන්න (අංක යොදා). වෙනත් හැඳින්වීම් හෝ අනවශ්‍ය කතා කිසිවක් ඇතුළත් නොකරන්න."""
             
@@ -142,12 +162,14 @@ Local SLM හි මූලික නිගමනය (Questionnaire Analysis):
             # Parse the response text into a list
             suggestions = [line.strip() for line in response.text.split('\n') if line.strip()]
             
-            # Clean up numbering (e.g. "1. යෝජනාව" -> "යෝජනාව")
+            # Clean up numbering (e.g. "1. යෝජනාව" -> "යෝජනාව") and asterisks
             cleaned_suggestions = []
             for s in suggestions:
                 import re
                 cleaned = re.sub(r'^\d+[\.\)]\s*', '', s).strip()
-                if cleaned.startswith('*') or cleaned.startswith('-'):
+                # Remove any single or double asterisks from start/end or anywhere in the sentence
+                cleaned = cleaned.replace('**', '').replace('*', '')
+                if cleaned.startswith('-'):
                     cleaned = cleaned[1:].strip()
                 if cleaned:
                     cleaned_suggestions.append(cleaned)
@@ -204,11 +226,18 @@ def chat_with_bot():
 You must communicate ENTIRELY in Sinhala (සිංහල).
 Your role is to act as an Agentic Therapist. 
 
-You must follow these 4 steps in your responses to guide the patient:
-1. Empathy & Validation: Acknowledge the user's feelings without judgment.
-2. CBT Reframing / Reassurance: Help the user identify negative thoughts or offer a reassuring perspective.
-3. Actionable Advice (RAG): Provide ONE practical step or technique based on the provided context.
-4. Probing Question: ALWAYS end your response with a gentle, open-ended question to dig deeper into the root cause of their feelings and keep the conversation going.
+CRITICAL: Keep your responses extremely short, concise, and natural (max 2-3 sentences). Do NOT write long paragraphs or essays. Be direct, natural, and conversational, while still being empathetic.
+
+The primary purpose of this chat is to discuss, clarify, and address the symptoms/issues the patient selected in their questionnaire profile.
+- Dynamically assess the conversation: As long as there are unresolved or unclarified concerns regarding their questionnaire profile issues, continue the conversational flow by asking gentle, relevant, open-ended questions to explore them.
+- Once you judge that their concerns have been sufficiently explored and they have received initial support/counseling, stop asking questions. Instead, provide a reassuring summary or tip, and gently let them know they can click the "Finish" button below to wrap up and get their final suggestions (e.g., "ඔබට අවශ්‍ය නම් පහත බොත්තමෙන් අවසන් කර යෝජනා ලබාගත හැක.").
+
+Follow these guidelines implicitly:
+1. Empathy & Validation: Acknowledge the user's input briefly.
+2. CBT/Advice: Offer a reassuring perspective or a practical tip in 1 sentence.
+3. Next Step: Ask one gentle question if concerns need further exploration. Otherwise, omit the question and guide them to finish the chat when they are ready.
+
+All steps combined must fit in a single, short, and natural response of 2-3 sentences.
 
 CRITICAL EMERGENCY GUARDRAIL: If the user mentions self-harm, suicide, or severe danger, STOP the standard process. Immediately urge them to contact the 1926 National Mental Health Helpline or Sri Lanka Sumithrayo in a highly compassionate tone.
 
