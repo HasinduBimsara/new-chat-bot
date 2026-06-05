@@ -46,6 +46,18 @@ def recommend_suggestions():
     
     if not user_answers:
         return jsonify({"error": "No answers provided"}), 400
+        
+    # Calculate severity and dynamic limits
+    max_score = 1
+    if user_answers:
+        max_score = max([ans.get('score', 1) for ans in user_answers])
+    
+    if max_score <= 2:
+        max_suggestions_limit = 3  # Mild/Healthy
+    elif max_score == 3:
+        max_suggestions_limit = 4  # Moderate
+    else:
+        max_suggestions_limit = 5  # Severe (maximum 5 is good to keep it concise and accurate)
     
     # 1. Collect all raw suggestions from user's answers and their associated scores
     raw_suggestions = []
@@ -87,7 +99,7 @@ def recommend_suggestions():
         if msg['sender'] == 'user':
             user_chat_messages.append(msg['text'])
             
-    # 2b. Retrieve suggestions related to user's chat messages using RAG
+    # 2b. Retrieve suggestions related to user's chat messages using RAG (Highly accurate combined query)
     chat_suggestions = []
     if user_chat_messages:
         try:
@@ -101,15 +113,15 @@ def recommend_suggestions():
             # Encode database suggestions
             doc_embeddings = model.encode(all_db_suggestions)
             
-            for user_msg in user_chat_messages:
-                # Skip short generic greetings
-                if len(user_msg.strip()) < 5:
-                    continue
-                query_embedding = model.encode([user_msg])
+            # Combine user messages to extract overall context and matching suggestions
+            combined_user_chat = " ".join([m for m in user_chat_messages if len(m.strip()) >= 5])
+            if combined_user_chat:
+                query_embedding = model.encode([combined_user_chat])
                 similarities = cosine_similarity(query_embedding, doc_embeddings)[0]
-                top_indices = np.argsort(similarities)[-3:][::-1]
+                # Match top 4 with a higher threshold (similarity > 0.42) for maximum accuracy
+                top_indices = np.argsort(similarities)[-4:][::-1]
                 for idx in top_indices:
-                    if similarities[idx] > 0.32:
+                    if similarities[idx] > 0.42:
                         chat_suggestions.append(all_db_suggestions[idx])
         except Exception as e:
             print("Error retrieving fallback chat suggestions:", e)
@@ -154,7 +166,11 @@ Local SLM හි මූලික නිගමනය (Questionnaire Analysis):
 2. අවසාන ලැයිස්තුවෙහි ඇති යෝජනා (Suggestions) ප්‍රශ්නාවලියේ මූලික යෝජනා (Clinical Database) වල ශෛලියට සහ ආකෘතියට (Short, direct, practical, single-sentence plain-text Sinhala advice) උපරිමයෙන් සමාන විය යුතුය.
 3. කිසිම හේතුවක් මත markdown formatting, තරු ලකුණු (* හෝ **), bold text හෝ මාතෘකා (headers) භාවිත නොකරන්න. එක් එක් යෝජනාව තනි සරල වාක්‍යයකින් (Plain-text) පමණක් සකස් කරන්න. උදාහරණයක් ලෙස: 'නින්දට යාමට පෙර තිර (Screens) භාවිතය අඩු කරන්න.' වැනි කෙටි සෘජු වාක්‍ය පමණක් ලියන්න.
 4. හැකිතාක් දුරට ලබා දී ඇති Clinical Database ලැයිස්තුවේ ඇති යෝජනා සෘජුවම තෝරාගෙන භාවිත කරන්න. රෝගියා කතාබහේදී සඳහන් කළ අලුත්ම කරුණු වෙනුවෙන් අලුතින්ම යෝජනා සාදන්නේ නම්, ඒවාද Clinical Database එකෙහි ඇති යෝජනා වල ශෛලියටම (Short, direct action items) ගැලපෙන සේ සකස් කරන්න.
-5. අවසාන ලැයිස්තුව රෝගියාගේ සැබෑ තත්ත්වයට සහ කතාබහට උපරිමයෙන් ගැලපෙන යෝජනා 10 ක් (හෝ ඊට වැඩි ගණනක්) විය යුතුය.
+5. අවසාන යෝජනා ගණන රෝගියාගේ මානසික සෞඛ්‍යයේ බරපතලකම (max score = {max_score}/5) මත පදනම්ව තීරණය කරන්න:
+   - රෝගියාගේ ගැටලු ඉතා අවම නම් (max score 1 හෝ 2), ලැයිස්තුවේ තිබිය යුත්තේ ඉතා කෙටි, සාමාන්‍ය උපදෙස් 3-4 ක් පමණි.
+   - රෝගියාගේ ගැටලු මධ්‍යස්ථ මට්ටමේ නම් (max score 3), ලැයිස්තුවේ උපදෙස් 4-5 ක් තිබිය යුතුය.
+   - රෝගියාගේ ගැටලු බරපතල මට්ටමේ නම් (max score 4 හෝ 5), ලැයිස්තුවේ වඩාත් වැදගත් උපදෙස් 5-6 ක් තිබිය යුතුය.
+   කිසිම හේතුවක් මත මුළු යෝජනා ගණන {max_suggestions_limit} සීමාව ඉක්මවා නොයන්න. අනවශ්‍ය හෝ නැවත නැවත කියවෙන උපදෙස් ලැයිස්තුගත කිරීමෙන් වළකින්න.
 
 පිළිතුරේ යෝජනා පමණක් ලැයිස්තුගත කරන්න (අංක යොදා). වෙනත් හැඳින්වීම් හෝ අනවශ්‍ය කතා කිසිවක් ඇතුළත් නොකරන්න."""
             
@@ -187,8 +203,8 @@ Local SLM හි මූලික නිගමනය (Questionnaire Analysis):
     # Fallback: Just return unique suggestions if Gemini is not available
     return jsonify({
         "total_raw": len(raw_suggestions),
-        "total_filtered": len(unique_texts),
-        "suggestions": unique_texts[:15] # Return up to 15
+        "total_filtered": min(len(unique_texts), max_suggestions_limit),
+        "suggestions": unique_texts[:max_suggestions_limit]
     })
 
 @app.route('/api/chat', methods=['POST'])
