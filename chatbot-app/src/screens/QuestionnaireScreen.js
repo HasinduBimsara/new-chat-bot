@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
 import { questions, options } from '../data/questions';
 import { getSuggestion } from '../services/aiService';
+import { db, auth } from '../services/firebase';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 export default function QuestionnaireScreen({ navigation }) {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
@@ -41,11 +43,24 @@ export default function QuestionnaireScreen({ navigation }) {
     }
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (currentQuestionIndex < questions.length - 1) {
       setCurrentQuestionIndex(currentQuestionIndex + 1);
       setCurrentSuggestion(null);
     } else {
+      // Save questionnaire to Firestore!
+      try {
+        const userUID = auth.currentUser?.uid || 'guest_user_123';
+        const userDocRef = doc(db, 'users', userUID);
+        await setDoc(userDocRef, {
+          questionnaireAnswers: answersContext,
+          lastUpdated: serverTimestamp()
+        }, { merge: true });
+        console.log("Mobile app questionnaire answers saved to Firestore.");
+      } catch (error) {
+        console.error("Error saving mobile questionnaire to Firestore:", error);
+      }
+
       // Go to Chat phase
       navigation.navigate('Chat', { questionnaireContext: answersContext });
     }
