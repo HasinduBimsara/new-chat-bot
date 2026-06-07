@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import json
 import os
+import random
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -53,17 +54,25 @@ def recommend_suggestions():
         max_score = max([ans.get('score', 1) for ans in user_answers])
     
     if max_score <= 2:
-        max_suggestions_limit = 3  # Mild/Healthy
+        max_suggestions_limit = 5  # Mild/Healthy — increased for more coverage
     elif max_score == 3:
-        max_suggestions_limit = 4  # Moderate
+        max_suggestions_limit = 7  # Moderate — more suggestions for moderate issues
     else:
-        max_suggestions_limit = 5  # Severe (maximum 5 is good to keep it concise and accurate)
+        max_suggestions_limit = 8  # Severe — comprehensive but still focused
     
     # 1. Collect all raw suggestions from user's answers and their associated scores
     raw_suggestions = []
     has_severe = False
     dataset_dict = None
-    for ans in user_answers:
+    
+    # Filter questionnaire suggestions to only include matching severity
+    # If the user has moderate or severe issues (max_score >= 3), we do not include suggestions for healthy/mild options (scores 1 and 2)
+    if max_score >= 3:
+        relevant_answers = [ans for ans in user_answers if ans.get('score', 1) >= 3]
+    else:
+        relevant_answers = user_answers
+
+    for ans in relevant_answers:
         score = ans.get('score', 1)
         if score >= 4:
             has_severe = True
@@ -89,6 +98,8 @@ def recommend_suggestions():
             raw_suggestions.append(sug)
             
     unique_texts = list(set(raw_suggestions))
+    # Shuffle for variety — each request gets a different ordering
+    random.shuffle(unique_texts)
     
     # 2. Extract key points from chat history
     chat_transcript = ""
@@ -107,6 +118,12 @@ def recommend_suggestions():
             all_db_suggestions = []
             for q in dataset_dict['questionnaire']:
                 for opt in q['options']:
+                    # Filter RAG suggestions: if user has issues, don't search through healthy options (score < 3)
+                    if max_score >= 3 and opt['score'] < 3:
+                        continue
+                    # If user is healthy, don't retrieve severe recommendations
+                    if max_score < 3 and opt['score'] >= 3:
+                        continue
                     all_db_suggestions.extend(opt['suggestions'])
             all_db_suggestions = list(set(all_db_suggestions))
             
@@ -129,6 +146,8 @@ def recommend_suggestions():
     # Combine questionnaire suggestions and chat RAG suggestions
     combined_raw_suggestions = raw_suggestions + chat_suggestions
     unique_texts = list(set(combined_raw_suggestions))
+    # Shuffle for variety — ensures different ordering on each request
+    random.shuffle(unique_texts)
         
     # 3. Use Local SLM to generate an initial summary of the questionnaire
     slm_questionnaire_summary = ""
@@ -144,33 +163,62 @@ def recommend_suggestions():
             slm_questionnaire_summary = "SLM දෝෂයකි."
 
     # 4. Use Gemini to generate a combined, intelligent summary
+    # Generate a random seed phrase to force Gemini to vary its output each time
+    variety_seed = random.randint(1000, 9999)
+    variety_styles = [
+        "මෙවර විශේෂයෙන්ම ප්‍රායෝගික ක්‍රියාමාර්ග කෙරෙහි අවධානය යොමු කරන්න.",
+        "මෙවර හැඟීම් පාලනය සහ CBT ක්‍රමවේද කෙරෙහි වැඩි අවධානයක් යොමු කරන්න.",
+        "මෙවර ශාරීරික සෞඛ්‍යය සහ දෛනික පුරුදු වෙනස් කිරීම කෙරෙහි අවධානය යොමු කරන්න.",
+        "මෙවර සමාජ සම්බන්ධතා සහ පවුල් සහාය කෙරෙහි වැඩි අවධානයක් යොමු කරන්න.",
+        "මෙවර මනසේ සන්සුන් බව සහ භාවනා/හුස්ම ගැනීමේ ක්‍රමවේද කෙරෙහි අවධානය යොමු කරන්න.",
+    ]
+    variety_instruction = random.choice(variety_styles)
+    
     if os.environ.get("GEMINI_API_KEY"):
         try:
             gen_model = genai.GenerativeModel('gemini-2.5-flash')
-            prompt = f"""ඔබ දක්ෂ සිංහල මනෝවිද්‍යා උපදේශකයෙකි. 
+            prompt = f"""ඔබ දක්ෂ සිංහල මනෝවිද්‍යා උපදේශකයෙකි. (Session ID: {variety_seed})
 පහත දැක්වෙන්නේ අපගේ Local AI Model (SLM) එක මගින් ප්‍රශ්නාවලියක් මත පදනම්ව ලබා දුන් මූලික නිගමනය, ප්‍රශ්නාවලියෙන් ලැබුණු මූලික යෝජනා (Clinical Database) සහ රෝගියා සමග පැවැත්වූ අවසාන කතාබහකි (Chat Transcript).
 
 Local SLM හි මූලික නිගමනය (Questionnaire Analysis):
 {slm_questionnaire_summary}
 
-ප්‍රශ්නාවලියේ මූලික යෝජනා (Clinical Database):
-{chr(10).join(unique_texts[:15])}
+ප්‍රශ්නාවලියේ මූලික යෝජනා (Clinical Database — මෙම ලැයිස්තුව සෑම වරම වෙනස් අනුපිළිවෙළකින් ලැබේ):
+{chr(10).join(unique_texts[:25])}
 
 රෝගියා සමග කතාබහ (Chat Transcript):
 {chat_transcript}
 
 කරුණාකර මෙම දත්ත සියල්ල (SLM නිගමනය, මූලික යෝජනා සහ Chat Transcript එක) ඉතා හොඳින් විශ්ලේෂණය කරන්න.
 
-විශේෂ උපදෙස්:
+=== ප්‍රතිඵල ව්‍යුහය (RESPONSE STRUCTURE) ===
+අවසාන ලැයිස්තුව පහත ක්‍රමයට සකස් කරන්න:
+
+කොටස 1 — ප්‍රායෝගික/සාමාන්‍ය යෝජනා (FIRST — General/Practical Suggestions):
+මුලින්ම, රෝගියාගේ තත්ත්වයට ගැලපෙන ප්‍රායෝගික, දෛනික ජීවිතයට අදාළ යෝජනා ලබාදෙන්න. උදාහරණ: ව්‍යායාම, නින්ද, ආහාර, භාවනා, හුස්ම ගැනීමේ ක්‍රම, journaling, ආදිය.
+
+කොටස 2 — අනිවාර්ය/බරපතල යෝජනා (LAST — Compulsory/Critical Suggestions):
+ලැයිස්තුවේ අවසානයට පමණක්, රෝගියාගේ බරපතලකම අනුව පහත වැනි අනිවාර්ය උපදෙස් එක් කරන්න:
+- වෘත්තීය උපදේශකයෙකුගේ සහාය ලබාගන්න
+- 1926 හෝ සුමිත්‍රයෝ සංවිධානය අමතන්න
+- රෝහල් මනෝවෛද්‍ය ඒකකයකින් ප්‍රතිකාර ලබාගන්න
+- ආදී බරපතල/අනිවාර්ය යෝජනා
+(max score 1 හෝ 2 නම් මෙම කොටස අවශ්‍ය නැත. max score 3 නම් උපදේශකයෙකු හමුවීම පමණක්. max score 4 හෝ 5 නම් 1926, සුමිත්‍රයෝ, වෛද්‍ය සහාය ආදිය ඇතුළත් කරන්න.)
+
+=== විශේෂ උපදෙස් ===
 1. රෝගියා කතාබහේදී (Chat Transcript) ඉදිරිපත් කළ නව ගැටලු, හැඟීම්, සිතුවිලි සහ තොරතුරු කෙරෙහි විශේෂ අවධානයක් යොමු කරන්න.
 2. අවසාන ලැයිස්තුවෙහි ඇති යෝජනා (Suggestions) ප්‍රශ්නාවලියේ මූලික යෝජනා (Clinical Database) වල ශෛලියට සහ ආකෘතියට (Short, direct, practical, single-sentence plain-text Sinhala advice) උපරිමයෙන් සමාන විය යුතුය.
 3. කිසිම හේතුවක් මත markdown formatting, තරු ලකුණු (* හෝ **), bold text හෝ මාතෘකා (headers) භාවිත නොකරන්න. එක් එක් යෝජනාව තනි සරල වාක්‍යයකින් (Plain-text) පමණක් සකස් කරන්න. උදාහරණයක් ලෙස: 'නින්දට යාමට පෙර තිර (Screens) භාවිතය අඩු කරන්න.' වැනි කෙටි සෘජු වාක්‍ය පමණක් ලියන්න.
 4. හැකිතාක් දුරට ලබා දී ඇති Clinical Database ලැයිස්තුවේ ඇති යෝජනා සෘජුවම තෝරාගෙන භාවිත කරන්න. රෝගියා කතාබහේදී සඳහන් කළ අලුත්ම කරුණු වෙනුවෙන් අලුතින්ම යෝජනා සාදන්නේ නම්, ඒවාද Clinical Database එකෙහි ඇති යෝජනා වල ශෛලියටම (Short, direct action items) ගැලපෙන සේ සකස් කරන්න.
-5. අවසාන යෝජනා ගණන රෝගියාගේ මානසික සෞඛ්‍යයේ බරපතලකම (max score = {max_score}/5) මත පදනම්ව තීරණය කරන්න:
-   - රෝගියාගේ ගැටලු ඉතා අවම නම් (max score 1 හෝ 2), ලැයිස්තුවේ තිබිය යුත්තේ ඉතා කෙටි, සාමාන්‍ය උපදෙස් 3-4 ක් පමණි.
-   - රෝගියාගේ ගැටලු මධ්‍යස්ථ මට්ටමේ නම් (max score 3), ලැයිස්තුවේ උපදෙස් 4-5 ක් තිබිය යුතුය.
-   - රෝගියාගේ ගැටලු බරපතල මට්ටමේ නම් (max score 4 හෝ 5), ලැයිස්තුවේ වඩාත් වැදගත් උපදෙස් 5-6 ක් තිබිය යුතුය.
+5. {variety_instruction}
+6. සෑම වරම වෙනස් යෝජනා combination එකක් තෝරාගන්න. පෙර වාරවල දුන් යෝජනාම නැවත නැවත නොදෙන්න. Clinical Database එකෙන් විවිධ යෝජනා තෝරාගෙන, නව වචන ප්‍රයෝග (synonyms/paraphrasing) භාවිතයෙන් යෝජනා සකස් කරන්න. එකම අදහස වෙනස් ආකාරයකින් ප්‍රකාශ කරන්න.
+7. අවසාන යෝජනා ගණන රෝගියාගේ මානසික සෞඛ්‍යයේ බරපතලකම (max score = {max_score}/5) මත පදනම්ව තීරණය කරන්න:
+   - රෝගියාගේ ගැටලු ඉතා අවම නම් (max score 1 හෝ 2), ලැයිස්තුවේ ප්‍රායෝගික උපදෙස් 4-5 ක් පමණි.
+   - රෝගියාගේ ගැටලු මධ්‍යස්ථ මට්ටමේ නම් (max score 3), ලැයිස්තුවේ ප්‍රායෝගික උපදෙස් 4-5 ක් + අනිවාර්ය උපදෙස් 1-2 ක් (මුළු 5-7 ක්) තිබිය යුතුය.
+   - රෝගියාගේ ගැටලු බරපතල මට්ටමේ නම් (max score 4 හෝ 5), ලැයිස්තුවේ ප්‍රායෝගික උපදෙස් 5-6 ක් + අනිවාර්ය උපදෙස් 2-3 ක් (මුළු 7-8 ක්) තිබිය යුතුය.
    කිසිම හේතුවක් මත මුළු යෝජනා ගණන {max_suggestions_limit} සීමාව ඉක්මවා නොයන්න. අනවශ්‍ය හෝ නැවත නැවත කියවෙන උපදෙස් ලැයිස්තුගත කිරීමෙන් වළකින්න.
+8. එකිනෙකට සමාන හෝ එකම අර්ථය දෙන යෝජනා දෙකක් ලැයිස්තුවේ ඇතුළත් නොකරන්න. සෑම යෝජනාවක්ම අනන්‍ය (unique) සහ වෙනස් ක්‍රියාමාර්ගයක් ගැන විය යුතුය.
+9. ඉතා වැදගත්: රෝගියාට මධ්‍යස්ථ හෝ බරපතල ගැටලුවක් ඇත්නම් (max score >= 3), කිසිසේත්ම 'මෙම යහපත් සෞඛ්‍ය සම්පන්න තත්ත්වය දිගටම පවත්වා ගන්න', 'ඔබගේ මනස ඉතා සන්සුන්ව පවතින බව පෙනේ', 'ඔබගේ මානසික සෞඛ්‍යය ඉතාමත් යහපත් මට්ටමක පවතී' වැනි සුවදායී තත්ත්වයේ සිටින අයට දෙන පොදු උපදෙස් ලැයිස්තුවට ඇතුළත් නොකරන්න. ඒවා රෝගියාට නොගැලපෙන බැවින් සම්පූර්ණයෙන්ම මඟහරින්න.
 
 පිළිතුරේ යෝජනා පමණක් ලැයිස්තුගත කරන්න (අංක යොදා). වෙනත් හැඳින්වීම් හෝ අනවශ්‍ය කතා කිසිවක් ඇතුළත් නොකරන්න."""
             
