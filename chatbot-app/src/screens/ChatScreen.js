@@ -1,30 +1,91 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { getChatResponse } from '../services/aiService';
+import { db, auth } from '../services/firebase';
+import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
 
 export default function ChatScreen({ route, navigation }) {
   const { questionnaireContext } = route.params;
-  const [messages, setMessages] = useState([
-    { id: '1', text: 'ඔබට තවදුරටත් කතා කිරීමට අවශ්‍ය වෙනත් යමක් තිබේද? (ඔබට අවශ්‍ය නැතිනම් පහළ ඇති බොත්තම ඔබා අවසන් යෝජනා ලබා ගන්න)', sender: 'bot' }
-  ]);
+  const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const flatListRef = useRef(null);
+
+  // Get current user UID or fallback to a default UID for development/testing
+  const userUID = auth.currentUser?.uid || 'guest_user_123';
+  const messagesCollectionRef = collection(db, 'users', userUID, 'messages');
+
+  // Load chat history in real-time from Firestore
+  useEffect(() => {
+    const q = query(messagesCollectionRef, orderBy('timestamp', 'asc'));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const loadedMessages = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          text: data.text,
+          sender: data.sender,
+          timestamp: data.timestamp
+        };
+      });
+
+      // If the database is empty (new user session), insert the default welcome message
+      if (loadedMessages.length === 0) {
+        addDoc(messagesCollectionRef, {
+          text: 'ඔබට තවදුරටත් කතා කිරීමට අවශ්‍ය වෙනත් යමක් තිබේද? (ඔබට අවශ්‍ය නැතිනම් පහළ ඇති බොත්තම ඔබා අවසන් යෝජනා ලබා ගන්න)',
+          sender: 'bot',
+          timestamp: serverTimestamp()
+        });
+      } else {
+        setMessages(loadedMessages);
+      }
+    }, (error) => {
+      console.error("Firestore subscription error:", error);
+    });
+
+    return () => unsubscribe();
+  }, [userUID]);
+
+  // Scroll to bottom when messages change
+  const scrollToBottom = () => {
+    if (flatListRef.current && messages.length > 0) {
+      flatListRef.current.scrollToEnd({ animated: true });
+    }
+  };
 
   const handleSend = async () => {
     if (!inputText.trim()) return;
 
-    const userMessage = { id: Date.now().toString(), text: inputText, sender: 'user' };
-    setMessages(prev => [...prev, userMessage]);
+    const typedText = inputText;
     setInputText('');
     setIsTyping(true);
 
     try {
-      const responseText = await getChatResponse(userMessage.text, questionnaireContext, messages);
-      const botMessage = { id: (Date.now() + 1).toString(), text: responseText, sender: 'bot' };
-      setMessages(prev => [...prev, botMessage]);
+      // 1. Save user's message to Firestore (reactive listener will render it immediately)
+      await addDoc(messagesCollectionRef, {
+        text: typedText,
+        sender: 'user',
+        timestamp: serverTimestamp()
+      });
+
+      // 2. Call backend with full chat history (which now includes this message)
+      const currentHistory = [...messages, { text: typedText, sender: 'user' }];
+      const responseText = await getChatResponse(typedText, questionnaireContext, currentHistory);
+
+      // 3. Save bot's reply to Firestore
+      await addDoc(messagesCollectionRef, {
+        text: responseText,
+        sender: 'bot',
+        timestamp: serverTimestamp()
+      });
     } catch (error) {
-      const errorMsg = { id: (Date.now() + 1).toString(), text: 'කණගාටුයි, දෝෂයක් ඇතිවිය.', sender: 'bot' };
-      setMessages(prev => [...prev, errorMsg]);
+      console.error("Error sending message:", error);
+      await addDoc(messagesCollectionRef, {
+        text: 'කණගාටුයි, සන්නිවේදන දෝෂයක් ඇතිවිය.',
+        sender: 'bot',
+        timestamp: serverTimestamp()
+      });
     } finally {
       setIsTyping(false);
     }
@@ -43,10 +104,13 @@ export default function ChatScreen({ route, navigation }) {
       keyboardVerticalOffset={90}
     >
       <FlatList
+        ref={flatListRef}
         data={messages}
         keyExtractor={item => item.id}
         renderItem={renderMessage}
         contentContainerStyle={styles.chatList}
+        onContentSizeChange={scrollToBottom}
+        onLayout={scrollToBottom}
       />
       
       {isTyping && (
