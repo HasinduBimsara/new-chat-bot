@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import html2pdf from 'html2pdf.js';
 import dataset from './dataset.json';
+import { db, auth } from './firebase';
+import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, doc, setDoc } from 'firebase/firestore';
 
 function App() {
   const [phase, setPhase] = useState('welcome'); // welcome, questionnaire, chat, summary
@@ -9,13 +11,58 @@ function App() {
   // History of answers
   const [contextHistory, setContextHistory] = useState([]);
   
-  // Chat state
-  const [messages, setMessages] = useState([
-    { id: 1, text: "ප්‍රශ්නාවලිය අවසන්! ඔබට තවදුරටත් මා සමග කතා කිරීමට අවශ්‍ය වෙනත් යමක් තිබේද? (අවශ්‍ය නැතිනම් 'අවසන් කරන්න' බොත්තම ඔබන්න)", sender: "bot" }
-  ]);
+  // Persistent local UID for testing, falls back to auth.currentUser?.uid if logged in
+  const [userUid] = useState(() => {
+    const cached = localStorage.getItem("chat_user_uid");
+    if (cached) return cached;
+    const generated = "web_guest_" + Math.random().toString(36).substr(2, 9);
+    localStorage.setItem("chat_user_uid", generated);
+    return generated;
+  });
+
+  // Chat state (Firestore messages will populate this)
+  const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState("");
   const [useLocalModel, setUseLocalModel] = useState(false); // Default to Gemini
   const messagesEndRef = useRef(null);
+
+  // Set up references to Firestore message collection
+  const activeUid = auth.currentUser?.uid || userUid;
+  const messagesCollectionRef = collection(db, 'users', activeUid, 'messages');
+
+  // Real-time listener for Firestore chat messages
+  useEffect(() => {
+    if (phase !== 'chat') return;
+
+    const q = query(messagesCollectionRef, orderBy('timestamp', 'asc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const loadedMessages = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          text: data.text,
+          sender: data.sender,
+          timestamp: data.timestamp
+        };
+      });
+
+      // Insert default welcome message if the database is empty
+      if (loadedMessages.length === 0) {
+        addDoc(messagesCollectionRef, {
+          text: "ප්‍රශ්නාවලිය අවසන්! ඔබට තවදුරටත් මා සමග කතා කිරීමට අවශ්‍ය වෙනත් යමක් තිබේද? (අවශ්‍ය නැතිනම් 'අවසන් කරන්න' බොත්තම ඔබන්න)",
+          sender: "bot",
+          timestamp: serverTimestamp()
+        });
+      } else {
+        setMessages(loadedMessages);
+      }
+    }, (error) => {
+      console.error("Firestore loading error:", error);
+    });
+
+    return () => unsubscribe();
+  }, [phase, activeUid]);
 
   // Scroll to bottom in chat
   useEffect(() => {
@@ -31,11 +78,24 @@ function App() {
   const [finalSuggestions, setFinalSuggestions] = useState([]);
   const [isLoadingSummary, setIsLoadingSummary] = useState(false);
 
+  const saveQuestionnaireToFirestore = async (history) => {
+    try {
+      const userDocRef = doc(db, 'users', activeUid);
+      await setDoc(userDocRef, {
+        questionnaireAnswers: history,
+        lastUpdated: serverTimestamp()
+      }, { merge: true });
+      console.log("Questionnaire answers saved to Firestore successfully.");
+    } catch (error) {
+      console.error("Error saving questionnaire to Firestore:", error);
+    }
+  };
+
   const handleOptionSelect = (option) => {
     // Save answer and suggestions silently
     const currentQ = dataset.questionnaire[currentQIndex];
-    setContextHistory(prev => [
-      ...prev,
+    const updatedHistory = [
+      ...contextHistory,
       {
         questionId: currentQ.id,
         question: currentQ.question,
@@ -44,12 +104,16 @@ function App() {
         score: option.score,
         suggestions: option.suggestions
       }
-    ]);
+    ];
+
+    setContextHistory(updatedHistory);
 
     // Go to next instantly
     if (currentQIndex < dataset.questionnaire.length - 1) {
       setCurrentQIndex(currentQIndex + 1);
     } else {
+      // Save full questionnaire to Firestore
+      saveQuestionnaireToFirestore(updatedHistory);
       setPhase('chat');
     }
   };
@@ -57,22 +121,29 @@ function App() {
   const handleSendMessage = async () => {
     if (!inputText.trim()) return;
 
-    const newMsg = { id: Date.now(), text: inputText, sender: 'user' };
-    setMessages(prev => [...prev, newMsg]);
+    const typedText = inputText;
     setInputText("");
 
     try {
-      // Create a snapshot of history including the current message
-      const historySnapshot = [...messages, newMsg].map(m => ({
+      // 1. Add user's message to Firestore
+      await addDoc(messagesCollectionRef, {
+        text: typedText,
+        sender: 'user',
+        timestamp: serverTimestamp()
+      });
+
+      // 2. Build history snapshot for backend including the new user message
+      const historySnapshot = [...messages, { text: typedText, sender: 'user' }].map(m => ({
         sender: m.sender,
         text: m.text
       }));
 
+      // 3. Request bot reply
       const response = await fetch('http://localhost:5000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          message: inputText,
+          message: typedText,
           contextHistory: contextHistory,
           chatHistory: historySnapshot,
           use_local_model: useLocalModel
@@ -80,10 +151,20 @@ function App() {
       });
       
       const data = await response.json();
-      setMessages(prev => [...prev, { id: Date.now()+1, text: data.reply || "දෝෂයකි.", sender: 'bot' }]);
+
+      // 4. Save bot's reply to Firestore
+      await addDoc(messagesCollectionRef, {
+        text: data.reply || "දෝෂයකි.",
+        sender: 'bot',
+        timestamp: serverTimestamp()
+      });
     } catch (error) {
       console.error("Chat Error:", error);
-      setMessages(prev => [...prev, { id: Date.now()+1, text: "ජාල දෝෂයකි. කරුණාකර නැවත උත්සාහ කරන්න.", sender: 'bot' }]);
+      await addDoc(messagesCollectionRef, {
+        text: "ජාල දෝෂයකි. කරුණාකර නැවත උත්සාහ කරන්න.",
+        sender: 'bot',
+        timestamp: serverTimestamp()
+      });
     }
   };
 
@@ -105,10 +186,10 @@ function App() {
       
       let filtered = data.suggestions || [];
       
-      // Add urgent hotline if score was 5 anywhere
+      // Add urgent hotline if score was 5 anywhere (placed at the end)
       const maxScore = Math.max(...contextHistory.map(c => c.score), 0);
       if (maxScore === 5 && !filtered.some(s => s.includes("1926"))) {
-        filtered.unshift("🚨 කරුණාකර හැකි ඉක්මනින් මනෝවිද්‍යා උපදේශකයෙකුගේ සහාය ලබා ගන්න හෝ 1926 (ජාතික මානසික සෞඛ්‍ය උපකාරක සේවය) වෙත අමතන්න.");
+        filtered.push("🚨 කරුණාකර හැකි ඉක්මනින් මනෝවිද්‍යා උපදේශකයෙකුගේ සහාය ලබා ගන්න හෝ 1926 (ජාතික මානසික සෞඛ්‍ය උපකාරක සේවය) වෙත අමතන්න.");
       }
       
       setFinalSuggestions(filtered);
