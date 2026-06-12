@@ -26,7 +26,7 @@ export const getSuggestion = async (questionText, answerText, context) => {
   return "ඔබගේ පිළිතුරට අනුව, ඔබ හොඳින් විවේක ගැනීම වැදගත් බව පෙනේ.";
 };
 
-export const getChatResponse = async (chatMessage, questionnaireContext, chatHistory) => {
+export const getChatResponse = async (chatMessage, questionnaireContext, chatHistory, useLocalModel = false) => {
   try {
     const formattedHistory = chatHistory.map(m => ({
       sender: m.sender,
@@ -54,7 +54,7 @@ export const getChatResponse = async (chatMessage, questionnaireContext, chatHis
         message: chatMessage,
         contextHistory: formattedContext,
         chatHistory: historySnapshot,
-        use_local_model: false // Default to Gemini on backend
+        use_local_model: useLocalModel
       })
     });
     

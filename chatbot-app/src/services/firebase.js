@@ -5,12 +5,12 @@ import { getFirestore } from 'firebase/firestore';
 // Firebase configuration placeholder. 
 // Replace these with your actual Firebase project configuration from Firebase Console.
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY_HERE",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID_HERE",
-  storageBucket: "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID_HERE",
-  appId: "YOUR_APP_ID_HERE"
+  apiKey: "AIzaSyD4sM4TspMdhDq38XF0rVkgkpm7q_HpfO8",
+  authDomain: "chatbot-testing-4a7f9.firebaseapp.com",
+  projectId: "chatbot-testing-4a7f9",
+  storageBucket: "chatbot-testing-4a7f9.firebasestorage.app",
+  messagingSenderId: "182721116114",
+  appId: "1:182721116114:web:68ac207b2789d63a817a0b"
 };
 
 // Initialize Firebase App
