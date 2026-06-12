@@ -266,6 +266,9 @@ def chat_with_bot():
     if not user_message:
         return jsonify({"error": "Message is required"}), 400
         
+    # Calculate turn limit and closure flow
+    user_turn_count = len([msg for msg in chat_history_raw if msg.get('sender') == 'user'])
+    is_wrap_up = user_turn_count >= 3
         
     if not use_local_model and not os.environ.get("GEMINI_API_KEY"):
         return jsonify({"reply": "තාක්ෂණික දෝෂයක්: කරුණාකර Backend එකේ .env ගොනුවට GEMINI_API_KEY එක ඇතුළත් කරන්න."})
@@ -323,6 +326,14 @@ CRITICAL EMERGENCY GUARDRAIL: If the user mentions self-harm, suicide, or severe
     else:
         system_instruction += "No specific RAG context needed for this query.\n"
 
+    if is_wrap_up:
+        system_instruction += """
+=== CONVERSATION CLOSURE ===
+You MUST NOT ask any questions in your response. Do NOT explore or ask for details anymore. 
+CRITICAL: Do NOT mention any message limit, count, or turn restrictions (such as "turn limit", "3 messages limit", or "limit reached") in your response to the user. The transition to the end of the conversation must feel completely natural.
+Acknowledge their message briefly and empathetically, give a final reassuring tip/advice, and politely guide them to click the "Finish" button below to wrap up and get their final suggestions (e.g., "ඔබට දැන් පහත ඇති බොත්තම ඔබා මෙම සාකච්ඡාව අවසන් කර ඔබ සඳහා වන අවසාන යෝජනා ලබා ගත හැක.").
+"""
+
     # --- Format Chat History for Gemini ---
     formatted_history = []
     # We skip the last message in chat_history_raw because it is the current user_message which we will send via chat.send_message()
@@ -338,6 +349,8 @@ CRITICAL EMERGENCY GUARDRAIL: If the user mentions self-harm, suicide, or severe
             # --- LOCAL SLM GENERATION ---
             # Summarize the system context for the smaller local model
             local_context = "ඔබ දක්ෂ සිංහල මනෝවිද්‍යා උපදේශකයෙකි. රෝගියාට කරුණාවෙන් උපදෙස් දෙන්න."
+            if is_wrap_up:
+                local_context += " සාකච්ඡාව අවසන් කිරීමට මඟ පෙන්වන්න."
                 
             response_text = generate_local_response(system_context=local_context, user_message=user_message)
             
@@ -345,6 +358,9 @@ CRITICAL EMERGENCY GUARDRAIL: If the user mentions self-harm, suicide, or severe
             # we explicitly append the intelligent RAG context so the user gets a helpful answer.
             if retrieved_context:
                 response_text = f"{response_text}\n\n💡 මානසික සෞඛ්‍ය යෝජනාව (RAG Context):\n{retrieved_context[0]}"
+                
+            if is_wrap_up:
+                response_text += "\n\n💡 ඔබට දැන් පහත ඇති බොත්තම ඔබා මෙම සාකච්ඡාව අවසන් කර ඔබ සඳහා වන අවසාන යෝජනා ලබා ගත හැක."
             
             return jsonify({
                 "reply": response_text,
